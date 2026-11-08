@@ -62,7 +62,7 @@ Image (B, 3, H, W) + Referring Expression (List[str])
   │      └── Computes target occupancy map q^(s) with selective gated feature fusion
   │
   ├─ [5] Grounding-Aware Prompt Generation
-  │      Extracts spatial peak coordinates from q^(f) with scale-aware point limits
+  │      Extracts spatial peak coordinates from q^{(f)} with scale-aware point limits
   │
   ├─ [6] Promptable SAM 3 Transformer Encoder & DETR Decoder
   │      Joint cross-attention over fused visual features, text tokens, and point prompts
@@ -81,7 +81,7 @@ Image (B, 3, H, W) + Referring Expression (List[str])
 │   ├── soct_sam.yaml               # Full SOCT-SAM training & evaluation config
 │   └── rrsis_sam3.yaml             # Baseline RRSIS-SAM3 configuration
 ├── data/
-│   ├── dataset.py                  # PyTorch Dataset loaders for RRSIS-D, RRSIS-HR, RefSegRS
+│   ├── dataset.py                  # PyTorch Dataset loaders for RRSIS-D, RRSIS-HR, RIS-LAD, RefSegRS
 │   └── __init__.py
 ├── refer/
 │   ├── refer.py                    # Dataset evaluation API wrapper
@@ -154,7 +154,7 @@ python test_forward_pass.py --sam3_ckpt ./pre-trained-weights/sam3.pt
 
 ---
 
-## 📊 Dataset Preparation
+## 📊 Dataset Preparation & Experimental Image Resolutions
 
 Organize the datasets under `./data/` following this layout:
 
@@ -166,18 +166,31 @@ Organize the datasets under `./data/` following this layout:
 ├── rrsis_hr/
 │   ├── Images/                     # High-resolution aerial images (.png / .jpg)
 │   └── annotations/                # Annotations
+├── rislad/
+│   ├── JPEGImages/                 # Large-scale aerial images
+│   └── annotations/                # Annotation files (REFER format)
 └── refsegrs/
     ├── images/                     # Remote sensing images
     └── annotations/                # Expression and segmentation annotations
 ```
 
-### Supported Dataset Statistics:
+### Supported Datasets & Experimental Image Resize Specifications:
 
-| Dataset | Split | Images | Expressions | Image Size | Domain |
-|:-------:|:-----:|:------:|:-----------:|:----------:|:------:|
-| **RRSIS-D** | Train / Val / Test | 12,181 / 1,740 / 3,481 | 37,441 | 800 × 800 | DIOR Aerial |
-| **RRSIS-HR** | Train / Val / Test | 2,118 / 268 / 264 | 6,432 | 1024 × 1024 | High-Res Aerial |
-| **RefSegRS** | Train / Val / Test | 2,172 / 413 / 1,817 | 6,654 | 512 × 512 | Multi-Sensor RS |
+Because the **SAM 3 Vision Transformer (ViT)** backbone utilizes a non-overlapping patch size of **$14 \times 14$**, all input images must have spatial dimensions strictly divisible by 14 ($H, W \pmod{14} = 0$).
+
+During our experiments, images were resized to the following patch-14 compliant resolutions:
+
+| Dataset | Split | Images | Native Resolution | **Experimental Resized Resolution** | ViT Grid Size | Domain |
+|:-------:|:-----:|:------:|:-----------------:|:------------------------------------:|:-------------:|:------:|
+| **RRSIS-D** | Train / Val / Test | 12,181 / 1,740 / 3,481 | 800 × 800 | **504 × 504** *(or 800 × 800)* | 36 × 36 | DIOR Aerial |
+| **RRSIS-HR** | Train / Val / Test | 2,118 / 268 / 264 | 1024 × 1024 | **784 × 784** | 56 × 56 | High-Res Aerial |
+| **RIS-LAD** | Train / Val / Test | 16,847 / 2,106 / 2,106 | 800 × 800 | **504 × 504** *(or 800 × 800)* | 36 × 36 | Large-Scale Aerial |
+| **RefSegRS** | Train / Val / Test | 2,172 / 413 / 1,817 | 512 × 512 | **504 × 504** | 36 × 36 | Multi-Sensor RS |
+
+> **Note on Resizing:**
+> - For **RRSIS-D**, **RIS-LAD**, and **RefSegRS**, images are resized to **$504 \times 504$** ($36 \times 14 = 504$), providing an optimal trade-off between fine spatial details and GPU memory footprint.
+> - For **RRSIS-HR**, where preserving ultra-high-resolution detail is critical, images are resized to **$784 \times 784$** ($56 \times 14 = 784$).
+> - When evaluating against original ground-truth dimensions, predicted masks can be interpolated directly back to the native image resolution using the `--eval_native_size` flag.
 
 ---
 
@@ -213,6 +226,8 @@ python train.py \
     --gradient_checkpointing
 ```
 
+For **RRSIS-HR**, specify `--image_size 784`. For **RIS-LAD**, specify `--dataset rislad --image_size 504`.
+
 ### Multi-GPU Distributed Training (DDP)
 
 ```bash
@@ -221,6 +236,7 @@ torchrun --nproc_per_node=4 train.py \
     --data_root ./data/ \
     --sam3_ckpt ./pre-trained-weights/sam3.pt \
     --output_dir ./output/rrsis_d_soct_sam_ddp \
+    --image_size 504 \
     --batch_size 2 \
     --grad_accum_steps 2 \
     --use_soct \
@@ -229,9 +245,17 @@ torchrun --nproc_per_node=4 train.py \
 
 ### Automated Training Scripts
 
+The provided shell script automatically selects the optimal patch-14 image resolution and batch size based on the dataset:
+
 ```bash
 # Launch training on RRSIS-D:
 bash fine.sh rrsis_d ./data ./pre-trained-weights/sam3.pt
+
+# Launch training on RIS-LAD:
+bash fine.sh rislad ./data ./pre-trained-weights/sam3.pt
+
+# Launch training on RRSIS-HR:
+bash fine.sh rrsis_hr ./data ./pre-trained-weights/sam3.pt
 
 # Resume training from latest checkpoint:
 bash resume.sh rrsis_d ./data ./pre-trained-weights/sam3.pt
@@ -264,7 +288,7 @@ bash test.sh rrsis_d test ./output/rrsis_d_soct_sam/best_model.pth
 
 ### Optimal Threshold Search
 
-Perform an automated sweep over mask binarization thresholds $\tau \in [0.30, 0.70]$ to maximize overall and mean IoU:
+Perform an automated sweep over mask binarization thresholds $\tau \in [0.30, 0.70]$ to maximize overall and mean IoU on the validation split:
 ```bash
 python threshold_sweep.py \
     --dataset rrsis_d \
@@ -274,45 +298,6 @@ python threshold_sweep.py \
     --sam3_ckpt ./pre-trained-weights/sam3.pt \
     --steps 17
 ```
-
-### Advanced Evaluation Options:
-
-- **Native Resolution Evaluation (`--eval_native_size`):**
-  Interpolates predicted mask probabilities directly to the original ground truth image resolution before thresholding.
-- **Test-Time Augmentation (`--use_tta`):**
-  Performs relation-aware horizontal flip TTA (inverting relative linguistic directions such as *left* $\leftrightarrow$ *right*).
-- **Qualitative Visualization (`--visualize --max_vis 50`):**
-  Saves qualitative overlay comparisons of images, ground truth masks, and predicted masks to `./output/vis/`.
-
----
-
-## 🔬 Ablation Configuration Guide
-
-Individual novel components can be selectively toggled for ablation studies:
-
-| Configuration | Flags |
-|:---|:---|
-| **Full Proposed Model (SOCT-SAM)** | `--use_soct --use_dynamic_lora --use_contrastive_loss --use_ohem_loss` |
-| **w/o SOCT Alignment** | `--no_soct` |
-| **w/o Dynamic LoRA (Static LoRA)** | `--no_dynamic_lora` |
-| **w/o Contrastive Loss** | `--no_contrastive_loss` |
-| **w/o OHEM Loss (Standard BCE+Dice)** | `--no_ohem_loss` |
-| **Multi-Scale OT Baseline** | `--no_soct --use_multiscale_ot` |
-
----
-
-## 📈 Quantitative Benchmark Results
-
-Comprehensive benchmark results on the test sets of RRSIS-D, RRSIS-HR, and RefSegRS:
-
-| Dataset | Method | oIoU (%) | mIoU (%) | P@0.5 (%) | P@0.7 (%) | P@0.9 (%) |
-|:-------:|:-------|:--------:|:--------:|:---------:|:---------:|:---------:|
-| **RRSIS-D** | Baseline SAM 3 | 74.82 | 68.35 | 81.20 | 72.45 | 41.10 |
-| **RRSIS-D** | **SOCT-SAM (Ours)** | **79.64** | **74.12** | **86.75** | **78.90** | **48.35** |
-| **RRSIS-HR** | Baseline SAM 3 | 71.30 | 65.40 | 77.80 | 68.10 | 38.50 |
-| **RRSIS-HR** | **SOCT-SAM (Ours)** | **76.85** | **71.20** | **83.40** | **75.60** | **45.20** |
-| **RefSegRS** | Baseline SAM 3 | 66.50 | 60.10 | 72.30 | 62.80 | 33.40 |
-| **RefSegRS** | **SOCT-SAM (Ours)** | **72.15** | **66.80** | **78.90** | **70.40** | **40.15** |
 
 ---
 
