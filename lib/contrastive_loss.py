@@ -1,5 +1,5 @@
 """
-Contrastive Language-Image Loss (InfoNCE) for Enhanced_RRSIS_UOT.
+Contrastive Language-Image Loss (InfoNCE) for SOCT-SAM.
 
 Adds an auxiliary contrastive learning objective that enforces alignment
 between the visual features of the masked (segmented) region and the

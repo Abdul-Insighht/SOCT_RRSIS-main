@@ -1,13 +1,13 @@
 #!/bin/bash
-# ====== Enhanced_RRSIS_UOT Evaluation Script ======
+# ====== SOCT-SAM Evaluation Script ======
 #
 # Usage:
 #   bash test.sh <dataset_name> <split> <checkpoint_path>
-#   e.g., bash test.sh rrsis_d test ./output/rrsis_d_enhanced_uot/best_model.pth
+#   e.g., bash test.sh rrsis_d test ./output/rrsis_d_soct_sam/best_model.pth
 
 DATASET=${1:-rrsis_d}
 SPLIT=${2:-test}
-CKPT=${3:-./output/${DATASET}_enhanced_uot/best_model.pth}
+CKPT=${3:-./output/${DATASET}_soct_sam/best_model.pth}
 DATA_ROOT=${4:-./data}
 USER_IMG_SIZE=${5:-""}
 
@@ -21,7 +21,7 @@ else
 fi
 
 echo "============================================="
-echo "  Enhanced_RRSIS_UOT Evaluation"
+echo "  SOCT-SAM Evaluation"
 echo "  Dataset:    ${DATASET}"
 echo "  Split:      ${SPLIT}"
 echo "  Checkpoint: ${CKPT}"

@@ -2,7 +2,7 @@ import argparse
 
 
 def get_parser():
-    parser = argparse.ArgumentParser(description='Enhanced RRSIS-UOT: Enhanced Referring Remote Sensing Image Segmentation with Unbalanced Optimal Transport')
+    parser = argparse.ArgumentParser(description='SOCT-SAM: Stochastic-Order Constrained Transport for Referring Remote Sensing Image Segmentation')
 
     # ====== Paths ======
     parser.add_argument('--data_root', type=str, default='./data/',
@@ -25,6 +25,8 @@ def get_parser():
                             'refsegrs', 'refseg-rs', 'refseg_rs'
                         ],
                         help='Dataset name: rrsis_d, rrsis_hr, ris-lad, refsegrs (hyphen & underscore aliases supported)')
+    parser.add_argument('--train_split', type=str, default='train',
+                        help='Data split to train on (e.g. train, trainval)')
     parser.add_argument('--split', type=str, default='val',
                         help='Data split (train/val/test)')
     parser.add_argument('--splitBy', type=str, default='unc',
@@ -64,11 +66,11 @@ def get_parser():
     parser.add_argument('--no_ohem_loss', action='store_true', default=False,
                         help='Disable OHEM loss (use standard Dice+BCE)')
 
-    # ====== SOCT-SAM Flags (CVPR 2027 Proposed Model B6) ======
+    # ====== SOCT-SAM Flags ======
     parser.add_argument('--use_soct', action='store_true', default=True,
                         help='Enable Stochastic-Order Constrained Transport (SOCT)')
     parser.add_argument('--no_soct', action='store_true', default=False,
-                        help='Disable SOCT (fallback to baseline ROTSAM B0)')
+                        help='Disable SOCT (fallback to baseline ROTSAM)')
     parser.add_argument('--lambda_ord', type=float, default=5.0,
                         help='SOCT: Stochastic order penalty multiplier')
     parser.add_argument('--theta_anchor', type=float, default=0.1,
@@ -153,6 +155,13 @@ def get_parser():
     # ====== Evaluation ======
     parser.add_argument('--eval_only', action='store_true', default=False,
                         help='Run evaluation only')
+    parser.add_argument('--eval_native_size', action='store_true', default=False,
+                        help='Evaluate prediction interpolated to native/original ground truth mask resolution')
+    parser.add_argument('--use_tta', action='store_true', default=False,
+                        help='Enable test-time augmentation (relation-aware aerial horizontal flip)')
+    parser.add_argument('--mask_threshold', type=float, default=0.50,
+                        help='Sigmoid threshold for mask binarization (default: 0.50). '
+                             'Use threshold_sweep.py to find the optimal value per checkpoint.')
     parser.add_argument('--visualize', '--save_vis', action='store_true', default=False,
                         dest='visualize', help='Save visualization of predictions')
     parser.add_argument('--max_vis', type=int, default=50,

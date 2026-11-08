@@ -1,9 +1,8 @@
 #!/bin/bash
 # ==============================================================================
-#                 Enhanced_RRSIS_UOT GPU Resume Training Script
+#                 SOCT-SAM GPU Resume Training Script
 # ==============================================================================
-# This script is highly optimized to resume training from the best checkpoint
-# with premium fine-tuning settings (Decay Floor and Regularization) to beat SOTA.
+# Resume training from checkpoint with fine-tuning settings.
 #
 # Usage:
 #   bash resume.sh [dataset_name] [data_root] [sam3_ckpt]
@@ -16,13 +15,13 @@
 DATASET=${1:-rrsis_d}
 DATA_ROOT=${2:-./data}
 SAM3_CKPT=${3:-./pre-trained-weights/sam3.pt}
-OUTPUT_DIR="./output/${DATASET}_enhanced_uot"
+OUTPUT_DIR="./output/${DATASET}_soct_sam"
 RESUME_CKPT=${4:-"${OUTPUT_DIR}/latest_model.pth"}
 USER_IMG_SIZE=${5:-""}
 
 # Auto-detect checkpoint if default does not exist
 if [ ! -f "${RESUME_CKPT}" ] && [ ! -d "${RESUME_CKPT}" ]; then
-    for cand in "${OUTPUT_DIR}/best_model.pth" "/kaggle/input/best_hr/best_model" "/kaggle/input/best-hr/best_model" "/kaggle/input/best_hr" "/kaggle/input/best-hr" "/kaggle/working/best_model.pth"; do
+    for cand in "${OUTPUT_DIR}/best_model.pth" "./checkpoints/best_model.pth"; do
         if [ -f "${cand}" ] || [ -d "${cand}" ]; then
             RESUME_CKPT="${cand}"
             break
@@ -50,7 +49,7 @@ fi
 
 # Highlight setup information
 echo "=============================================================================="
-echo "🔄 Resuming Enhanced_RRSIS_UOT training on GPU..."
+echo "🔄 Resuming SOCT-SAM training on GPU..."
 echo "📊 Dataset:         ${DATASET}"
 echo "📂 Data Root:       ${DATA_ROOT}"
 echo "💾 SAM3 Ckpt:       ${SAM3_CKPT}"

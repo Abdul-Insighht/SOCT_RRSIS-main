@@ -1,10 +1,10 @@
 """
-Enhanced_RRSIS_UOT Training Script
+SOCT-SAM Training Script
 
-Train Enhanced RRSIS model with 4 novel techniques:
-    1. Text-Guided Dynamic LoRA
-    2. Contrastive Language-Image Loss
-    3. Multi-Scale OT Feature Alignment
+Train SOCT-SAM model for Referring Remote Sensing Image Segmentation:
+    1. Stochastic-Order Constrained Transport (SOCT)
+    2. Text-Guided Dynamic LoRA
+    3. Multi-Scale Cost Lifting & Target Occupancy Prompting
     4. OHEM + Focal + Boundary Loss
 
 Supports: RRSIS-D, RRSIS-HR, RefSegRS datasets.
@@ -28,7 +28,7 @@ from torch.utils.data import DataLoader
 
 from args import get_args
 from data.dataset import get_dataset, collate_fn
-from lib.enhanced_model import Enhanced_RRSIS_UOT
+from lib.soct_sam_model import SOCT_SAM
 from lib.rs_adapters import get_trainable_params_summary
 import utils
 
@@ -270,7 +270,7 @@ def main():
     # Device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"\n{'='*60}")
-    print(f"  Enhanced_RRSIS_UOT Training")
+    print(f"  SOCT-SAM Training")
     print(f"  Dataset: {args.dataset}")
     print(f"  Image Size: {args.image_size}×{args.image_size}")
     print(f"  LoRA Rank: {args.lora_rank}")
@@ -297,9 +297,9 @@ def main():
         print(f"🔍 [INFO] Provided data_root '{args.data_root}' not found. Auto-resolved to: '{resolved_data}'")
         args.data_root = resolved_data
 
-    # ====== Build Enhanced Model ======
-    print("Building Enhanced_RRSIS_UOT model (SOCT-SAM)...")
-    model = Enhanced_RRSIS_UOT(
+    # ====== Build Model ======
+    print("Building SOCT-SAM model...")
+    model = SOCT_SAM(
         sam3_ckpt=args.sam3_ckpt,
         image_size=args.image_size,
         lora_rank=args.lora_rank,
@@ -313,7 +313,7 @@ def main():
         use_contrastive_loss=args.use_contrastive_loss,
         use_multiscale_ot=args.use_multiscale_ot,
         use_ohem_loss=args.use_ohem_loss,
-        # SOCT-SAM (CVPR 2027 Proposed Full Model B6)
+        # SOCT-SAM Model
         use_soct=getattr(args, 'use_soct', True) and not getattr(args, 'no_soct', False),
         lambda_ord=getattr(args, 'lambda_ord', 5.0),
         theta_anchor=getattr(args, 'theta_anchor', 0.1),
@@ -341,7 +341,7 @@ def main():
     gpu_mem = f"{torch.cuda.get_device_properties(0).total_memory / (1024**3):.1f} GB" if torch.cuda.is_available() else "N/A"
 
     print("\n" + "="*70)
-    print("  SOCT-SAM: Enhanced_RRSIS_UOT Training Framework (CVPR 2027)")
+    print("  SOCT-SAM Training Framework")
     print("="*70)
     print(f"  Dataset:              {args.dataset}")
     print(f"  Data Root:            {args.data_root}")
@@ -369,7 +369,8 @@ def main():
 
     # ====== Build Datasets ======
     print("\nLoading datasets...")
-    train_dataset = get_dataset(args, split='train', eval_mode=False)
+    train_split = getattr(args, 'train_split', 'train')
+    train_dataset = get_dataset(args, split=train_split, eval_mode=False)
     val_dataset = get_dataset(args, split='val', eval_mode=True)
 
     train_loader = DataLoader(
@@ -417,7 +418,7 @@ def main():
 
     if resume_target:
 
-        # 1. If path is a directory (e.g. unzipped PyTorch archive from Kaggle dataset upload)
+        # 1. If path is a directory (e.g. unzipped PyTorch archive)
         if os.path.isdir(resume_target):
             found_dir = None
             if os.path.exists(os.path.join(resume_target, 'data.pkl')):
@@ -450,12 +451,8 @@ def main():
                 f"{resume_target}.pth",
                 os.path.join(resume_target, 'best_model.pth'),
                 os.path.join(resume_target, 'latest_model.pth'),
-                os.path.join('/kaggle/input', os.path.basename(resume_target)),
-                os.path.join('/kaggle/input/best_hr', os.path.basename(resume_target)),
-                os.path.join('/kaggle/input/best-hr', os.path.basename(resume_target)),
-                '/kaggle/input/best_hr/best_model.pth',
-                '/kaggle/input/best-hr/best_model.pth',
-                '/kaggle/working/best_model.pth',
+                os.path.join(args.output_dir, 'best_model.pth'),
+                os.path.join(args.output_dir, 'latest_model.pth'),
             ]
             for cand in candidates:
                 if os.path.isfile(cand):
@@ -506,6 +503,8 @@ def main():
                 elif best_iou <= 1.0 and best_iou > 0.0:
                     # Fractional scale (e.g. 0.70 -> 70.0)
                     best_iou = best_iou * 100.0
+
+
             print(f"  Resumed at epoch {start_epoch}, best_mIoU={best_iou:.2f}%")
             
             # Fast-forward the scheduler to the correct step
@@ -517,8 +516,8 @@ def main():
     # ====== Wandb ======
     if HAS_WANDB:
         wandb.init(
-            project="Enhanced_RRSIS_UOT",
-            name=f"{args.dataset}_enhanced_lr{args.lr}_lora{args.lora_rank}",
+            project="SOCT_SAM",
+            name=f"{args.dataset}_soct_lr{args.lr}_lora{args.lora_rank}",
             config=vars(args),
         )
 
@@ -587,8 +586,8 @@ def main():
         except Exception as e:
             print(f"  ⚠️ [ERROR] Failed to save latest_model.pth: {e}. Check available disk space!")
 
-        # Save checkpoint every 10 epochs
-        if (epoch + 1) % 10 == 0:
+        # Save checkpoint every 10 epochs (Disabled by default to save disk space; only latest & best saved)
+        if getattr(args, 'save_every_10', False) and (epoch + 1) % 10 == 0:
             save_path = os.path.join(args.output_dir, f'checkpoint_epoch{epoch+1}.pth')
             try:
                 torch.save({

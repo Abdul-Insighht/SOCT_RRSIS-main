@@ -1,7 +1,6 @@
 r"""
 SOCT (Stochastic-Order Constrained Transport) Feature Alignment Module.
-Implementation of CVPR 2027 paper:
-"SOCT-SAM: Stochastic-Order Constrained Transport for Referring Remote Sensing Image Segmentation"
+SOCT-SAM: Stochastic-Order Constrained Transport for Referring Remote Sensing Image Segmentation
 
 Key Components:
 1. Multi-scale Cost Lifting with Geometric Aggregation Operators (D_s).
@@ -180,9 +179,7 @@ class DualConditionedSinkhorn(nn.Module):
                 delta = (delta + step).clamp(min=0.0)
 
         # Step 2: Differentiable unrolled solve with optimal delta*
-        # Paper CVPR 2027 Section 3.6 & Section 6 Control 7:
-        # 'Differentiate through the implemented fixed-budget unrolling during training,
-        # including demands, anchor priors and bandwidths. Verify gradients to costs...'
+        # Fixed-budget unrolling during training to propagate gradients to costs and demands
         delta_omega = torch.bmm(delta.unsqueeze(1), omega_flat).squeeze(1)
         delta_C = - (delta_omega / rho_safe).unsqueeze(-1) * t_indicator
         P_star = self._sinkhorn_inner(C_lifted + delta_C, a, b)

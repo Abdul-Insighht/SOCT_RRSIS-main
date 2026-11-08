@@ -1,25 +1,21 @@
 """
-Enhanced_RRSIS_UOT: Enhanced model wrapping RRSIS_SAM3 with 4 new techniques.
+SOCT_SAM: Main model architecture for Referring Remote Sensing Image Segmentation.
 
-Enhancements over RRSIS_SAM3:
-    1. Text-Guided Dynamic LoRA — text-conditioned vision adapter weights
-    2. Contrastive Language-Image Loss — InfoNCE alignment supervision
-    3. Multi-Scale OT Feature Alignment — per-FPN-level OT alignment
-    4. OHEM Loss — hard pixel mining + focal + boundary-aware supervision
-
-All 4 techniques can be individually enabled/disabled via flags for
-ablation studies.
+Key Components:
+    1. Stochastic-Order Constrained Transport (SOCT) Alignment
+    2. Text-Guided Dynamic LoRA
+    3. Multi-Scale Feature Alignment
+    4. Grounding-Aware Target Occupancy Point Prompting
+    5. OHEM + Focal + Boundary Loss
 
 Architecture:
     Input (Image + Text)
-        → SAM3 VL Backbone (ViT + Text Encoder)
-            + Dynamic LoRA (text-conditioned vision adaptation) [NEW]
-        → Multi-Scale OT Alignment (per-FPN-level) [ENHANCED]
-        → Transformer Encoder (fusion)
-        → DETR Decoder (detection)
-        → Segmentation Head (mask prediction)
-        → OHEM + Focal + Boundary Loss [ENHANCED]
-        → Contrastive Loss (auxiliary) [NEW]
+        -> SAM3 VL Backbone (ViT + Text Encoder)
+            + Dynamic LoRA (text-conditioned vision adaptation)
+        -> SOCT Feature Alignment & Target Occupancy Prompting
+        -> Transformer Encoder (cross-modal fusion)
+        -> DETR Decoder (detection & query scoring)
+        -> Segmentation Head (mask prediction)
 """
 
 import torch
@@ -55,16 +51,16 @@ from .soct_loss import SOCTSupervisionLoss
 from .language_parser import GLOBAL_PARSER
 
 
-class Enhanced_RRSIS_UOT(nn.Module):
+class SOCT_SAM(nn.Module):
     """
-    Enhanced RRSIS model with Unbalanced Optimal Transport and
-    4 novel techniques for improved performance.
+    SOCT-SAM: Stochastic-Order Constrained Transport for Referring Remote Sensing Image Segmentation.
 
-    This model wraps SAM3 and extends the base RRSIS_SAM3 with:
-    - Text-Guided Dynamic LoRA for text-aware vision adaptation
-    - Multi-Scale OT alignment across all FPN levels
-    - Contrastive loss for vision-language alignment
-    - OHEM loss for handling extreme class imbalance
+    Extends SAM 3 foundation model with:
+    - Stochastic-Order Constrained Transport (SOCT) with directional ordering constraints
+    - Target occupancy geometric point prompting (GPG)
+    - Text-Guided Dynamic LoRA adapters
+    - Multi-scale visual-linguistic feature alignment
+    - OHEM + Focal + Boundary loss supervision
 
     All enhancements are individually toggleable for ablation.
 
@@ -102,7 +98,7 @@ class Enhanced_RRSIS_UOT(nn.Module):
         use_contrastive_loss: bool = True,
         use_multiscale_ot: bool = True,
         use_ohem_loss: bool = True,
-        # === SOCT-SAM (CVPR 2027 Proposed Full Model B6) ===
+        # === SOCT-SAM Model ===
         use_soct: bool = True,
         lambda_ord: float = 5.0,
         theta_anchor: float = 0.1,
@@ -141,7 +137,7 @@ class Enhanced_RRSIS_UOT(nn.Module):
         self.focal_gamma = focal_gamma
 
         # ====== Build SAM3 Image Model ======
-        print("[Enhanced_RRSIS_UOT] Building SAM3 image model...")
+        print("[SOCT_SAM] Building SAM3 image model...")
         self.sam3 = build_sam3_image_model(
             device="cpu",
             eval_mode=False,
@@ -162,12 +158,12 @@ class Enhanced_RRSIS_UOT(nn.Module):
         d_model = self.sam3.hidden_dim  # typically 256
 
         if use_dynamic_lora:
-            print("[Enhanced_RRSIS_UOT] Injecting Text-Guided Dynamic LoRA...")
+            print("[SOCT_SAM] Injecting Text-Guided Dynamic LoRA...")
             _, self.lora_manager = inject_dynamic_lora_adapters(
                 self.sam3, text_dim=d_model, rank=lora_rank, alpha=lora_alpha, lora_dropout=lora_dropout
             )
         else:
-            print("[Enhanced_RRSIS_UOT] Using standard static LoRA...")
+            print("[SOCT_SAM] Using standard static LoRA...")
             inject_lora_adapters(self.sam3, rank=lora_rank, alpha=lora_alpha, lora_dropout=lora_dropout)
             self.lora_manager = None
 
@@ -176,11 +172,11 @@ class Enhanced_RRSIS_UOT(nn.Module):
 
         # ====== Gradient Checkpointing ======
         if gradient_checkpointing:
-            print("[Enhanced_RRSIS_UOT] Gradient checkpointing enabled")
+            print("[SOCT_SAM] Gradient checkpointing enabled")
 
         # ====== Alignment Module ======
         if use_soct:
-            print(f"[Enhanced_RRSIS_UOT] SOCT-SAM Alignment enabled (lambda_ord={lambda_ord}, theta={theta_anchor})")
+            print(f"[SOCT_SAM] SOCT-SAM Alignment enabled (lambda_ord={lambda_ord}, theta={theta_anchor})")
             self.soct_aligner = SOCTAligner(
                 d_model=d_model,
                 num_scales=num_ot_scales,
@@ -196,7 +192,7 @@ class Enhanced_RRSIS_UOT(nn.Module):
                 lambda_tau=lambda_tau,
             )
         elif use_multiscale_ot:
-            print(f"[Enhanced_RRSIS_UOT] Multi-Scale OT Alignment ({num_ot_scales} scales) [Baseline B0]")
+            print(f"[SOCT_SAM] Multi-Scale OT Alignment ({num_ot_scales} scales) [Baseline]")
             self.ms_ot_aligner = MultiScaleOTAligner(
                 d_model=d_model,
                 num_scales=num_ot_scales,
@@ -205,7 +201,7 @@ class Enhanced_RRSIS_UOT(nn.Module):
             )
         else:
             # Fallback to single-scale OT from RRSIS_SAM3
-            print("[Enhanced_RRSIS_UOT] Single-Scale OT Alignment (baseline)")
+            print("[SOCT_SAM] Single-Scale OT Alignment (baseline)")
             self.ot_aligner = OTFeatureAligner(
                 d_model=d_model,
                 reg=ot_reg,
@@ -214,7 +210,7 @@ class Enhanced_RRSIS_UOT(nn.Module):
 
         # ====== Contrastive Loss ======
         if use_contrastive_loss:
-            print("[Enhanced_RRSIS_UOT] Contrastive Loss (InfoNCE) enabled")
+            print("[SOCT_SAM] Contrastive Loss (InfoNCE) enabled")
             self.contrastive_loss = ContrastiveLoss(
                 visual_dim=d_model,
                 text_dim=d_model,
@@ -222,18 +218,18 @@ class Enhanced_RRSIS_UOT(nn.Module):
 
         # ====== OHEM Loss ======
         if use_ohem_loss:
-            print("[Enhanced_RRSIS_UOT] OHEM + FocalDice + Boundary Loss enabled")
+            print("[SOCT_SAM] OHEM + FocalDice + Boundary Loss enabled")
             self.enhanced_loss = EnhancedOHEMLoss(
                 hard_ratio=ohem_hard_ratio,
                 boundary_weight=boundary_loss_weight,
                 focal_gamma=focal_gamma
             )
         else:
-            print("[Enhanced_RRSIS_UOT] Standard Dice+BCE Loss (baseline)")
+            print("[SOCT_SAM] Standard Dice+BCE Loss (baseline)")
             self.standard_loss = OTSegmentationLoss()
 
         # ====== Grounding-Aware Prompt Generator ======
-        print("[Enhanced_RRSIS_UOT] Grounding-Aware Prompt Generation (GPG) enabled")
+        print("[SOCT_SAM] Grounding-Aware Prompt Generation (GPG) enabled")
         self.gpg = GroundingAwarePromptGenerator(max_points=5, min_separation=2)
 
         # ====== Print Summary ======
@@ -253,7 +249,7 @@ class Enhanced_RRSIS_UOT(nn.Module):
         if hasattr(backbone, 'vision_backbone'):
             for param in backbone.vision_backbone.parameters():
                 param.requires_grad = False
-            print("[Enhanced_RRSIS_UOT] ViT backbone frozen")
+            print("[SOCT_SAM] ViT backbone frozen")
 
     def _freeze_text_encoder(self):
         """Freeze the text encoder."""
@@ -261,7 +257,7 @@ class Enhanced_RRSIS_UOT(nn.Module):
         if hasattr(backbone, 'language_backbone'):
             for param in backbone.language_backbone.parameters():
                 param.requires_grad = False
-            print("[Enhanced_RRSIS_UOT] Text encoder frozen")
+            print("[SOCT_SAM] Text encoder frozen")
 
     def _unfreeze_trainable_components(self):
         """Unfreeze components we want to fine-tune."""
@@ -270,22 +266,22 @@ class Enhanced_RRSIS_UOT(nn.Module):
                 param.requires_grad = True
             for param in self.sam3.transformer.decoder.parameters():
                 param.requires_grad = True
-            print("[Enhanced_RRSIS_UOT] Transformer encoder+decoder unfrozen")
+            print("[SOCT_SAM] Transformer encoder+decoder unfrozen")
 
         if self.sam3.segmentation_head is not None:
             for param in self.sam3.segmentation_head.parameters():
                 param.requires_grad = True
-            print("[Enhanced_RRSIS_UOT] Segmentation head unfrozen")
+            print("[SOCT_SAM] Segmentation head unfrozen")
 
         if hasattr(self.sam3, 'geometry_encoder'):
             for param in self.sam3.geometry_encoder.parameters():
                 param.requires_grad = True
-            print("[Enhanced_RRSIS_UOT] Geometry encoder unfrozen")
+            print("[SOCT_SAM] Geometry encoder unfrozen")
 
         if hasattr(self.sam3, 'dot_prod_scoring') and self.sam3.dot_prod_scoring is not None:
             for param in self.sam3.dot_prod_scoring.parameters():
                 param.requires_grad = True
-            print("[Enhanced_RRSIS_UOT] Scoring head unfrozen")
+            print("[SOCT_SAM] Scoring head unfrozen")
 
     def normalize_image(self, images):
         """Normalize images to SAM3's expected range [-1, 1]."""
@@ -320,7 +316,7 @@ class Enhanced_RRSIS_UOT(nn.Module):
         if self.use_dynamic_lora and self.lora_manager is not None:
             text_feats = text_out.get('language_features', None)
             if text_feats is not None:
-                # Pool text features for conditioning: (seq, B, C) → (B, C)
+                # Pool text features for conditioning: (seq, B, C) â†’ (B, C)
                 if text_feats.dim() == 3:
                     pooled_text = text_feats.mean(dim=0)  # (B, C)
                 else:
@@ -486,7 +482,11 @@ class Enhanced_RRSIS_UOT(nn.Module):
             )
 
         # ====== Step 8: Select Best Mask ======
-        result = self._select_best_mask(out, B, masks_gt=masks_gt if self.training else None)
+        result = self._select_best_mask(
+            out, B,
+            masks_gt=masks_gt if self.training else None,
+            q_finest=q_finest,
+        )
 
         # ====== Step 9: Clear Dynamic LoRA conditioning ======
         # if self.use_dynamic_lora and self.lora_manager is not None:
@@ -560,9 +560,16 @@ class Enhanced_RRSIS_UOT(nn.Module):
 
         return result
 
-    def _select_best_mask(self, out, batch_size, masks_gt=None):
+    def _select_best_mask(self, out, batch_size, masks_gt=None, q_finest=None):
         """Select the best mask from SAM3's multi-query output."""
         result = {}
+
+        if q_finest is not None:
+            result['q_finest'] = q_finest
+
+        semantic_seg = out.get('semantic_seg', None)
+        if semantic_seg is not None:
+            result['semantic_seg'] = semantic_seg
 
         pred_logits = out.get('pred_logits', None)
         if pred_logits is not None:
@@ -580,7 +587,7 @@ class Enhanced_RRSIS_UOT(nn.Module):
             if pred_logits is not None:
                 # During training with GT available: use IoU matching to select the winning query
                 # so the best query hypothesis receives mask gradients and the classifier
-                # learns to pick it. During eval/inference, use classifier argmax.
+                # learns to pick it. During eval/inference, use SOCT-guided consensus + classifier.
                 if self.training and masks_gt is not None:
                     with torch.no_grad():
                         gt_for_iou = masks_gt.float()
@@ -598,13 +605,58 @@ class Enhanced_RRSIS_UOT(nn.Module):
                         best_score_idx = scores.argmax(dim=-1)
 
                         best_idx = torch.where(has_overlap, best_iou_idx, best_score_idx)
+                    batch_idx = torch.arange(batch_size, device=pred_masks.device)
+                    best_masks = pred_masks[batch_idx, best_idx].unsqueeze(1)
                 else:
-                    scores = pred_logits.squeeze(-1)
-                    best_idx = scores.argmax(dim=-1)
+                    scores = pred_logits.squeeze(-1).float()  # (B, N)
+                    soct_w = getattr(self, 'soct_query_weight', 0.35)
+                    topk_q = getattr(self, 'eval_topk_queries', 1)
 
-                batch_idx = torch.arange(batch_size, device=pred_masks.device)
-                best_masks = pred_masks[batch_idx, best_idx]
-                best_masks = best_masks.unsqueeze(1)
+                    if q_finest is not None and soct_w > 0.0:
+                        with torch.no_grad():
+                            q_ref = F.interpolate(
+                                q_finest.unsqueeze(1).float(),
+                                size=pred_masks.shape[-2:],
+                                mode='bilinear',
+                                align_corners=False,
+                            )  # (B, 1, H_m, W_m)
+                            # Normalize q_ref to [0, 1] per sample so sparse transport mass scales cleanly
+                            q_max = q_ref.amax(dim=(2, 3), keepdim=True).clamp(min=1e-6)
+                            q_norm = (q_ref / q_max).clamp(0.0, 1.0)
+
+                            p_prob = torch.sigmoid(pred_masks.float())  # (B, N, H_m, W_m)
+                            inter_q = (p_prob * q_norm).sum(dim=(2, 3))
+                            union_q = p_prob.sum(dim=(2, 3)) + q_norm.sum(dim=(2, 3)) - inter_q
+                            soct_iou = (inter_q + 1e-6) / (union_q + 1e-6)  # (B, N)
+
+                            # Normalize classifier probabilities across Top-10 candidates to prevent low-rank noise
+                            cls_prob = torch.sigmoid(scores)
+                            cls_norm = cls_prob / (cls_prob.max(dim=-1, keepdim=True)[0] + 1e-6)
+                            soct_norm = soct_iou / (soct_iou.max(dim=-1, keepdim=True)[0] + 1e-6)
+
+                            # Restrict re-ranking to top-10 classifier queries
+                            top_m = min(10, scores.shape[-1])
+                            _, topm_indices = torch.topk(scores, k=top_m, dim=-1)
+                            topm_mask = torch.zeros_like(scores, dtype=torch.bool)
+                            topm_mask.scatter_(1, topm_indices, True)
+
+                            combined_scores = (1.0 - soct_w) * cls_norm + soct_w * soct_norm
+                            combined_scores = combined_scores.masked_fill(~topm_mask, -1e9)
+                    else:
+                        combined_scores = scores
+
+                    if topk_q > 1:
+                        k_eff = min(topk_q, combined_scores.shape[-1])
+                        top_vals, top_idxs = torch.topk(combined_scores, k=k_eff, dim=-1)
+                        weights = F.softmax(top_vals * 5.0, dim=-1).unsqueeze(-1).unsqueeze(-1)  # (B, K, 1, 1)
+                        batch_idx = torch.arange(batch_size, device=pred_masks.device).unsqueeze(1).expand(-1, k_eff)
+                        selected_masks = pred_masks[batch_idx, top_idxs].float()  # (B, K, H_m, W_m)
+                        ens_prob = (torch.sigmoid(selected_masks) * weights).sum(dim=1, keepdim=True).clamp(1e-6, 1.0 - 1e-6)
+                        best_masks = torch.log(ens_prob / (1.0 - ens_prob))
+                    else:
+                        best_idx = combined_scores.argmax(dim=-1)
+                        batch_idx = torch.arange(batch_size, device=pred_masks.device)
+                        best_masks = pred_masks[batch_idx, best_idx].unsqueeze(1)
             else:
                 best_masks = pred_masks[:, 0:1]
 
@@ -648,3 +700,5 @@ class Enhanced_RRSIS_UOT(nn.Module):
         result['pred_probs'] = torch.sigmoid(result['pred_masks'])
         result['pred_binary'] = (result['pred_probs'] > 0.5).float()
         return result
+
+

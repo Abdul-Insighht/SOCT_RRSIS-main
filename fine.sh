@@ -1,17 +1,15 @@
 #!/bin/bash
 # ==============================================================================
-#                 Enhanced_RRSIS_UOT GPU Training Script (Optimized)
+#                 SOCT-SAM GPU Training Script
 # ==============================================================================
-# This script is highly optimized to run on high-performance GPU systems from scratch.
-# It automatically applies all 4 core enhancements and utilizes naye SOTA hyperparameters.
-#
-# Target Performance: oIoU = 84.00%+, mIoU = 74.00%+
+# Highly optimized training launcher for SOCT-SAM on GPU.
+# Applies SOCT alignment, Dynamic LoRA, Contrastive Loss, and OHEM Loss.
 #
 # Usage:
 #   bash fine.sh [dataset_name] [data_root] [sam3_ckpt]
 #
 # Examples:
-#   bash fine.sh rrsis_d /path/to/data ./pre-trained-weights/sam3.pt
+#   bash fine.sh rrsis_d ./data ./pre-trained-weights/sam3.pt
 # ==============================================================================
 
 # Default parameters
@@ -19,7 +17,7 @@ DATASET=${1:-rrsis_d}
 DATA_ROOT=${2:-./data}
 SAM3_CKPT=${3:-./pre-trained-weights/sam3.pt}
 USER_IMG_SIZE=${4:-""}
-OUTPUT_DIR="./output/${DATASET}_enhanced_uot"
+OUTPUT_DIR="./output/${DATASET}_soct_sam"
 
 # Determine mathematically optimal patch-14 image size
 if [ -n "${USER_IMG_SIZE}" ]; then
@@ -41,7 +39,7 @@ fi
 
 # Highlight setup information
 echo "=============================================================================="
-echo "🚀 Starting Enhanced_RRSIS_UOT training on GPU..."
+echo "🚀 Starting SOCT-SAM training on GPU..."
 echo "📊 Dataset:         ${DATASET}"
 echo "📂 Data Root:       ${DATA_ROOT}"
 echo "💾 SAM3 Ckpt:       ${SAM3_CKPT}"

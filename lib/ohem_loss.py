@@ -1,6 +1,6 @@
 """
 OHEM (Online Hard Example Mining) + Focal + Boundary-Aware Loss
-for Enhanced_RRSIS_UOT.
+for SOCT-SAM.
 
 Remote sensing images have extreme foreground-background imbalance
 (often 98%+ background). These loss functions focus training on
@@ -347,12 +347,22 @@ class EnhancedOHEMLoss(nn.Module):
                     union = pred_binary.sum(dim=(2, 3)) + gt_expanded.sum(dim=(2, 3)) - intersection
                     per_query_iou = (intersection + 1e-6) / (union + 1e-6)  # (B, N)
 
-                    # Best query -> 1.0, others -> 0.0
-                    target_scores = torch.zeros_like(scores)
+                    # Soft IoU targets + 1.0 peak for the best query
+                    target_scores = per_query_iou.clamp(0.0, 1.0)
                     best_query = per_query_iou.argmax(dim=1)  # (B,)
                     target_scores[torch.arange(B, device=device), best_query] = 1.0
                     # Zero out targets for empty-mask samples
                     target_scores = target_scores * has_object.unsqueeze(1)
+
+                    # Combine soft-IoU BCE with 200-way cross-entropy ranking loss on non-empty samples
+                    bce_loss = F.binary_cross_entropy_with_logits(
+                        scores, target_scores, reduction='mean'
+                    )
+                    valid_mask = has_object > 0.5
+                    if valid_mask.any():
+                        ce_rank_loss = F.cross_entropy(scores[valid_mask], best_query[valid_mask])
+                        return bce_loss + 0.5 * ce_rank_loss
+                    return bce_loss
                 else:
                     # Fallback for empty masks: all targets = 0
                     target_scores = torch.zeros_like(scores)

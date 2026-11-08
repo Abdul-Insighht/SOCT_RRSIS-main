@@ -1,9 +1,7 @@
 r"""
 Grounding-Aware Prompt Generation from Target Occupancy for SOCT-SAM.
-Implementation of CVPR 2027 paper:
-"SOCT-SAM: Stochastic-Order Constrained Transport for Referring Remote Sensing Image Segmentation"
+SOCT-SAM: Stochastic-Order Constrained Transport for Referring Remote Sensing Image Segmentation
 
-Section 3.7:
 - Derive geometric prompts directly from finest-grid target occupancy q^(f) \in [0, 1].
 - Select spatially separated local maxima (peaks) of q^(f) as positive points (cap K = 5).
 - Do not use max_k P_{jk} or min-max normalization.

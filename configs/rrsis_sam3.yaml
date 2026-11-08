@@ -10,7 +10,7 @@ freeze_text_encoder: true # Freeze text encoder
 
 # ====== Training ======
 epochs: 40
-batch_size: 2            # Per GPU (Kaggle 16GB compatible)
+batch_size: 2            # Per GPU batch size
 grad_accum_steps: 4      # Effective batch = 2 * 4 = 8
 lr: 5e-5                 # Base learning rate
 lr_backbone: 1e-5        # LoRA adapter learning rate
@@ -25,7 +25,7 @@ ce_weight: 0.5
 boundary_weight: 0.2
 
 # ====== Optimization ======
-fp16: true               # Mixed precision for Kaggle 16GB
+fp16: true               # Mixed precision training
 gradient_checkpointing: true
 seed: 42
 

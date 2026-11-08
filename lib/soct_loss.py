@@ -1,9 +1,7 @@
 r"""
-SOCT Loss Functions.
-Implementation of CVPR 2027 paper:
-"SOCT-SAM: Stochastic-Order Constrained Transport for Referring Remote Sensing Image Segmentation"
+SOCT Loss Functions for SOCT-SAM.
+SOCT-SAM: Stochastic-Order Constrained Transport for Referring Remote Sensing Image Segmentation
 
-Section 3.8:
 1. Occupancy Loss: Balanced BCE + Soft Dice on finest grid target occupancy q^(f) vs ground truth.
 2. Target Area Loss: Huber loss on log-scale predicted area \hat{\rho} vs GT area \rho*.
 3. Bandwidth Regularization: Quadratic penalty on log(\tau_m / \tau_0).

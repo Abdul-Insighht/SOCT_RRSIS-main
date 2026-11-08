@@ -1,5 +1,5 @@
 """
-Text-Guided Dynamic LoRA for Enhanced_RRSIS_UOT.
+Text-Guided Dynamic LoRA for SOCT-SAM.
 
 Instead of static LoRA adapters (same ΔW for every input), Dynamic LoRA
 generates text-conditioned LoRA matrices so the vision encoder becomes

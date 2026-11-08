@@ -49,7 +49,7 @@ class REFER:
             print('Split by {}!'.format(splitBy))
         self.ROOT_DIR = osp.abspath(osp.dirname(__file__))
         
-        # Robust DATA_DIR resolution for Kaggle
+        # Robust DATA_DIR resolution
         ref_filename = 'refs(' + splitBy + ').p'
         possible_data_dirs = [
             osp.join(data_root, 'Annotations'),
@@ -67,7 +67,7 @@ class REFER:
             osp.join(data_root, 'rrsis-d'),
             osp.join(data_root, 'rrsisd'),
             osp.join(data_root, 'data', dataset),         # /data_root/data/rrsis_hr
-            osp.join(data_root, 'data', 'rrsisd'),        # Kaggle dataset has rrsisd inside data!
+            osp.join(data_root, 'data', 'rrsisd'),        # Nested data directory structure
             osp.join(data_root, 'rrsisd'),
             osp.join(data_root, 'data'),                  # /data_root/data
             data_root                                     # /data_root

@@ -91,6 +91,7 @@ class RRSISDDataset(data.Dataset):
         self.split = split
         self.eval_mode = eval_mode
         self.image_size = args.image_size
+        self.return_orig_mask = getattr(args, 'eval_native_size', False) and eval_mode
 
         # Load REFER annotations
         self.refer = REFER(args.data_root, 'rrsis_d', args.splitBy)
@@ -115,8 +116,9 @@ class RRSISDDataset(data.Dataset):
         ])
         
         # Zoom-In Crop & Horizontal Flip
-        self.zoom_crop = TargetAwareZoomCrop(zoom_prob=0.5, small_threshold=0.1) if split == 'train' else None
-        self.hflip = RandomHorizontalFlip(flip_prob=0.5) if split == 'train' else None
+        is_train_mode = split in ['train', 'trainval', 'train_val']
+        self.zoom_crop = TargetAwareZoomCrop(zoom_prob=0.5, small_threshold=0.1) if is_train_mode else None
+        self.hflip = RandomHorizontalFlip(flip_prob=0.5) if is_train_mode else None
 
         # Random augmentation for training
         if split == 'train':
@@ -162,7 +164,7 @@ class RRSISDDataset(data.Dataset):
             img, mask_pil = self.zoom_crop(img, mask_pil, caption=caption)
             annot = np.array(mask_pil)
 
-        # Random horizontal reflection with relation inversion (Paper CVPR 2027 Control 5)
+        # Random horizontal reflection with relation inversion
         if self.hflip is not None:
             mask_pil = Image.fromarray(annot)
             img, mask_pil, caption = self.hflip(img, mask_pil, caption=caption)
@@ -170,10 +172,12 @@ class RRSISDDataset(data.Dataset):
 
         # Resize image and mask
         img = self.img_transform(img)
-        mask = torch.from_numpy(annot).unsqueeze(0).float()
-        mask = TF.resize(mask, [self.image_size, self.image_size],
+        orig_mask = torch.from_numpy(annot).unsqueeze(0).float()
+        mask = TF.resize(orig_mask.clone(), [self.image_size, self.image_size],
                          interpolation=TF.InterpolationMode.NEAREST)
 
+        if self.return_orig_mask:
+            return img, mask, caption, orig_mask
         return img, mask, caption
 
     @staticmethod
@@ -204,6 +208,7 @@ class RRSISHRDataset(data.Dataset):
         self.split = split
         self.eval_mode = eval_mode
         self.image_size = args.image_size
+        self.return_orig_mask = getattr(args, 'eval_native_size', False) and eval_mode
 
         # Load REFER annotations
         self.refer = REFER(args.data_root, 'rrsis_hr', args.splitBy)
@@ -228,8 +233,9 @@ class RRSISHRDataset(data.Dataset):
         ])
         
         # Zoom-In Crop & Horizontal Flip
-        self.zoom_crop = TargetAwareZoomCrop(zoom_prob=0.5, small_threshold=0.1) if split == 'train' else None
-        self.hflip = RandomHorizontalFlip(flip_prob=0.5) if split == 'train' else None
+        is_train_mode = split in ['train', 'trainval', 'train_val']
+        self.zoom_crop = TargetAwareZoomCrop(zoom_prob=0.5, small_threshold=0.1) if is_train_mode else None
+        self.hflip = RandomHorizontalFlip(flip_prob=0.5) if is_train_mode else None
 
         self._img_cache = {}
         print(f"[RRSIS-HR] Loaded {len(self.ref_ids)} samples for {split}")
@@ -264,7 +270,7 @@ class RRSISHRDataset(data.Dataset):
             img, mask_pil = self.zoom_crop(img, mask_pil, caption=caption)
             annot = np.array(mask_pil)
 
-        # Random horizontal reflection with relation inversion (Paper CVPR 2027 Control 5)
+        # Random horizontal reflection with relation inversion
         if self.hflip is not None:
             mask_pil = Image.fromarray(annot)
             img, mask_pil, caption = self.hflip(img, mask_pil, caption=caption)
@@ -272,10 +278,12 @@ class RRSISHRDataset(data.Dataset):
 
         # Resize
         img = self.img_transform(img)
-        mask = torch.from_numpy(annot).unsqueeze(0).float()
-        mask = TF.resize(mask, [self.image_size, self.image_size],
+        orig_mask = torch.from_numpy(annot).unsqueeze(0).float()
+        mask = TF.resize(orig_mask.clone(), [self.image_size, self.image_size],
                          interpolation=TF.InterpolationMode.NEAREST)
 
+        if self.return_orig_mask:
+            return img, mask, caption, orig_mask
         return img, mask, caption
 
 
@@ -291,6 +299,7 @@ class RISLADDataset(data.Dataset):
         self.split = split
         self.eval_mode = eval_mode
         self.image_size = args.image_size
+        self.return_orig_mask = getattr(args, 'eval_native_size', False) and eval_mode
 
         # Load REFER annotations
         self.refer = REFER(args.data_root, 'rislad', args.splitBy)
@@ -315,8 +324,9 @@ class RISLADDataset(data.Dataset):
         ])
         
         # Zoom-In Crop & Horizontal Flip
-        self.zoom_crop = TargetAwareZoomCrop(zoom_prob=0.5, small_threshold=0.1) if split == 'train' else None
-        self.hflip = RandomHorizontalFlip(flip_prob=0.5) if split == 'train' else None
+        is_train_mode = split in ['train', 'trainval', 'train_val']
+        self.zoom_crop = TargetAwareZoomCrop(zoom_prob=0.5, small_threshold=0.1) if is_train_mode else None
+        self.hflip = RandomHorizontalFlip(flip_prob=0.5) if is_train_mode else None
 
         # Random augmentation for training
         if split == 'train':
@@ -362,7 +372,7 @@ class RISLADDataset(data.Dataset):
             img, mask_pil = self.zoom_crop(img, mask_pil, caption=caption)
             annot = np.array(mask_pil)
 
-        # Random horizontal reflection with relation inversion (Paper CVPR 2027 Control 5)
+        # Random horizontal reflection with relation inversion
         if self.hflip is not None:
             mask_pil = Image.fromarray(annot)
             img, mask_pil, caption = self.hflip(img, mask_pil, caption=caption)
@@ -370,10 +380,12 @@ class RISLADDataset(data.Dataset):
 
         # Resize image and mask
         img = self.img_transform(img)
-        mask = torch.from_numpy(annot).unsqueeze(0).float()
-        mask = TF.resize(mask, [self.image_size, self.image_size],
+        orig_mask = torch.from_numpy(annot).unsqueeze(0).float()
+        mask = TF.resize(orig_mask.clone(), [self.image_size, self.image_size],
                          interpolation=TF.InterpolationMode.NEAREST)
 
+        if self.return_orig_mask:
+            return img, mask, caption, orig_mask
         return img, mask, caption
 
     @staticmethod
@@ -403,21 +415,43 @@ class RefSegRSDataset(data.Dataset):
         self.split = split
         self.eval_mode = eval_mode
         self.image_size = args.image_size
+        self.return_orig_mask = getattr(args, 'eval_native_size', False) and eval_mode
         
         # Robust data_root resolution for RefSegRS
-        if data_root and os.path.exists(data_root):
-            self.data_root = data_root
-        elif os.path.exists(os.path.join(args.data_root, 'RefSegRS')):
-            self.data_root = os.path.join(args.data_root, 'RefSegRS')
-        elif os.path.exists(os.path.join(args.data_root, 'refsegrs')):
-            self.data_root = os.path.join(args.data_root, 'refsegrs')
-        elif os.path.exists(os.path.join(args.data_root, 'refseg-rs')):
-            self.data_root = os.path.join(args.data_root, 'refseg-rs')
-        else:
-            self.data_root = args.data_root
+        target_root = data_root or args.data_root
+        cand_roots = [
+            target_root,
+            os.path.join(target_root, 'RefSegRS'),
+            os.path.join(target_root, 'refsegrs'),
+            os.path.join(target_root, 'refseg-rs'),
+            os.path.join('..', target_root),
+            os.path.join('..', 'data', 'RefSegRS'),
+            os.path.join('..', 'RefSegRS'),
+            './RefSegRS',
+            '../RefSegRS',
+            './data',
+            '../data',
+        ]
+        self.data_root = target_root
+        for cr in cand_roots:
+            if cr and os.path.exists(cr):
+                # Check if it directly contains the split text file or an images dir
+                if (os.path.exists(os.path.join(cr, f'output_phrase_{split}.txt')) or 
+                    os.path.exists(os.path.join(cr, f'{split}.txt')) or
+                    os.path.exists(os.path.join(cr, 'images'))):
+                    self.data_root = cr
+                    break
 
-        # Load data from text files
-        self.imgs, self.labels, self.sentences = self._build_batches(split)
+        # Load data from text files (Auto-combine train + val for full SOTA coverage)
+        if split in ['train', 'trainval', 'train_val']:
+            imgs_tr, lbls_tr, sents_tr = self._build_batches('train')
+            imgs_va, lbls_va, sents_va = self._build_batches('val')
+            self.imgs = imgs_tr + imgs_va
+            self.labels = lbls_tr + lbls_va
+            self.sentences = sents_tr + sents_va
+            print(f"[RefSegRS] Auto-merged train ({len(imgs_tr)}) + val ({len(imgs_va)}) -> Total {len(self.imgs)} samples for SOTA training!")
+        else:
+            self.imgs, self.labels, self.sentences = self._build_batches(split)
 
         # Build caption lists
         self.captions = []
@@ -431,13 +465,14 @@ class RefSegRSDataset(data.Dataset):
         ])
         
         # Zoom-In Crop & Horizontal Flip
-        self.zoom_crop = TargetAwareZoomCrop(zoom_prob=0.5, small_threshold=0.1) if split == 'train' else None
-        self.hflip = RandomHorizontalFlip(flip_prob=0.5) if split == 'train' else None
+        self.zoom_crop = TargetAwareZoomCrop(zoom_prob=0.5, small_threshold=0.1) if split in ['train', 'trainval', 'train_val'] else None
+        self.hflip = RandomHorizontalFlip(flip_prob=0.5) if split in ['train', 'trainval', 'train_val'] else None
 
         print(f"[RefSegRS] Loaded {len(self.imgs)} samples for {split}")
 
     def _build_batches(self, split):
         """Load image/mask paths and captions from text files."""
+
         im_dir = os.path.join(self.data_root, 'images')
         if not os.path.exists(im_dir):
             for cand in ['Images', 'JPEGImages', 'img']:
@@ -468,10 +503,22 @@ class RefSegRSDataset(data.Dataset):
                 break
 
         if set_file is None:
-            set_file = os.path.join(self.data_root, f'output_phrase_{split}.txt')
+            # Fallback recursive search if files are in a nested directory
+            for sf in split_files:
+                for root, _, files in os.walk(self.data_root):
+                    if sf in files:
+                        set_file = os.path.join(root, sf)
+                        # Also align im_dir and seg_dir to this root if they exist there
+                        if os.path.exists(os.path.join(root, 'images')):
+                            im_dir = os.path.join(root, 'images')
+                        if os.path.exists(os.path.join(root, 'masks')):
+                            seg_dir = os.path.join(root, 'masks')
+                        break
+                if set_file:
+                    break
 
         all_imgs, all_labels, all_sentences = [], [], []
-        if os.path.exists(set_file):
+        if set_file and os.path.exists(set_file):
             with open(set_file, 'r') as f:
                 for line in f.readlines():
                     parts = line.strip().split(' ')
@@ -500,6 +547,11 @@ class RefSegRSDataset(data.Dataset):
                     all_labels.append(lbl_p)
                     all_sentences.append(sentence)
 
+        if len(all_imgs) == 0:
+            print(f"⚠️ [WARNING] Could not find split annotations for '{split}' in '{self.data_root}'.")
+            print(f"    Looked for files: {split_files}")
+            print(f"    Please check the directory path passed to --data_root.")
+
         return all_imgs, all_labels, all_sentences
 
     def __len__(self):
@@ -527,7 +579,7 @@ class RefSegRSDataset(data.Dataset):
             img, mask_pil = self.zoom_crop(img, mask_pil, caption=caption)
             annot = np.array(mask_pil)
 
-        # Random horizontal reflection with relation inversion (Paper CVPR 2027 Control 5)
+        # Random horizontal reflection with relation inversion
         if self.hflip is not None:
             mask_pil = Image.fromarray(annot)
             img, mask_pil, caption = self.hflip(img, mask_pil, caption=caption)
@@ -535,10 +587,12 @@ class RefSegRSDataset(data.Dataset):
 
         # Resize
         img = self.img_transform(img)
-        mask = torch.from_numpy(annot).unsqueeze(0).float()
-        mask = TF.resize(mask, [self.image_size, self.image_size],
+        orig_mask = torch.from_numpy(annot).unsqueeze(0).float()
+        mask = TF.resize(orig_mask.clone(), [self.image_size, self.image_size],
                          interpolation=TF.InterpolationMode.NEAREST)
 
+        if self.return_orig_mask:
+            return img, mask, caption, orig_mask
         return img, mask, caption
 
 
@@ -588,10 +642,19 @@ def collate_fn(batch):
     """
     Custom collate function for RRSIS datasets.
 
-    Handles variable-length captions (strings) alongside tensor data.
+    Handles variable-length captions alongside tensor data and optional native ground truth masks.
     """
+    if len(batch[0]) == 4:
+        images, masks, captions, orig_masks = zip(*batch)
+        images = torch.stack(images, dim=0)
+        masks = torch.stack(masks, dim=0)
+        try:
+            orig_masks = torch.stack(orig_masks, dim=0)
+        except Exception:
+            orig_masks = list(orig_masks)
+        return images, masks, list(captions), orig_masks
+
     images, masks, captions = zip(*batch)
     images = torch.stack(images, dim=0)
     masks = torch.stack(masks, dim=0)
-    # captions remain as list of strings (or list of lists for eval)
     return images, masks, list(captions)

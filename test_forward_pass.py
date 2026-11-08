@@ -5,33 +5,26 @@ import argparse
 import torch
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from lib.enhanced_model import Enhanced_RRSIS_UOT
+from lib.soct_sam_model import SOCT_SAM
 
 
 def find_sam3_ckpt(user_path: str = None) -> str:
-    """Auto-detect sam3.pt across local and Kaggle directories."""
+    """Find sam3.pt across common local directories."""
     candidates = []
     if user_path:
         candidates.append(user_path)
     
-    # Common local and Kaggle paths
+    # Common local paths
     candidates.extend([
         "./pre-trained-weights/sam3.pt",
         "../sam3_pre_trained_weights/sam3.pt",
-        "/kaggle/input/Weight_SAM3/sam3.pt",
-        "/kaggle/input/weight-sam3/sam3.pt",
-        "/kaggle/input/datasets/habdulrehman/weight-sam3/sam3.pt",
+        "./checkpoints/sam3.pt",
+        "../checkpoints/sam3.pt",
     ])
     
     for p in candidates:
         if os.path.isfile(p):
             return p
-            
-    # Search recursively under /kaggle/input if available
-    if os.path.exists("/kaggle/input"):
-        matches = glob.glob("/kaggle/input/**/sam3.pt", recursive=True)
-        if matches:
-            return matches[0]
             
     return user_path or "./pre-trained-weights/sam3.pt"
 
@@ -43,14 +36,14 @@ def test_forward(ckpt_path: str = None):
     if not os.path.isfile(sam3_ckpt):
         raise FileNotFoundError(
             f"Could not find sam3.pt at '{sam3_ckpt}'. "
-            f"Please pass via --sam3_ckpt <path_to_sam3.pt> or ensure Weight_SAM3 is added in Kaggle Input."
+            f"Please specify via --sam3_ckpt <path_to_sam3.pt>."
         )
 
     print("Initializing Model...")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Target Device: {device}")
 
-    model = Enhanced_RRSIS_UOT(
+    model = SOCT_SAM(
         sam3_ckpt=sam3_ckpt,
         image_size=800,
         lora_rank=4,

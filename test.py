@@ -1,16 +1,25 @@
 """
-Enhanced_RRSIS_UOT Evaluation Script
+SOCT-SAM Evaluation Script
 
-Evaluate trained Enhanced_RRSIS_UOT model on test/val sets.
+Evaluate trained SOCT-SAM model on test/val sets.
 Computes: mIoU, oIoU (overall IoU), Precision@X thresholds.
+Supports:
+  1. Standard evaluation or Native Ground Truth evaluation (--eval_native_size)
+  2. Relation-aware aerial Test-Time Augmentation (--use_tta)
+  3. Configurable mask binarization threshold (--mask_threshold)
 
 Usage:
-    python test.py --dataset rrsis_d --data_root /path/to/data --resume ./output/best_model.pth
+    python test.py --dataset refseg_rs --split test --image_size 700 \
+        --resume ./output/refsegrs_700_40epochs/best_model.pth \
+        --output_dir ./output/refsegrs_700_40epochs \
+        --eval_native_size --eval_only
 """
 
 import os
 import time
+import re
 import numpy as np
+import cv2
 from PIL import Image
 
 import torch
@@ -19,8 +28,34 @@ from torch.utils.data import DataLoader
 
 from args import get_args
 from data.dataset import get_dataset, collate_fn
-from lib.enhanced_model import Enhanced_RRSIS_UOT
+from lib.soct_sam_model import SOCT_SAM
 import utils
+
+
+def swap_horizontal_relations(text):
+    """
+    Swap left/right, west/east directional tokens for relation-aware aerial TTA.
+    Ensures that when an image is horizontally reflected, text queries with directional
+    spatial anchors match the mirrored visual targets.
+    """
+    substitutions = [
+        (r'\bleft\b', 'TEMP_RIGHT_PLACEHOLDER'),
+        (r'\bright\b', 'left'),
+        (r'\bTEMP_RIGHT_PLACEHOLDER\b', 'right'),
+        (r'\bwest\b', 'TEMP_EAST_PLACEHOLDER'),
+        (r'\beast\b', 'west'),
+        (r'\bTEMP_EAST_PLACEHOLDER\b', 'east'),
+        (r'\bwestern\b', 'TEMP_EASTERN_PLACEHOLDER'),
+        (r'\beastern\b', 'western'),
+        (r'\bTEMP_EASTERN_PLACEHOLDER\b', 'eastern'),
+        (r'\bleftmost\b', 'TEMP_RIGHTMOST_PLACEHOLDER'),
+        (r'\brightmost\b', 'leftmost'),
+        (r'\bTEMP_RIGHTMOST_PLACEHOLDER\b', 'rightmost'),
+    ]
+    res = text
+    for pat, rep in substitutions:
+        res = re.sub(pat, rep, res, flags=re.IGNORECASE)
+    return res
 
 
 def compute_metrics(pred_masks, gt_masks, threshold=0.5):
@@ -34,6 +69,9 @@ def compute_metrics(pred_masks, gt_masks, threshold=0.5):
     Returns:
         dict with IoU, precision at various thresholds
     """
+    if pred_masks.shape[-2:] != gt_masks.shape[-2:]:
+        pred_masks = F.interpolate(pred_masks, size=gt_masks.shape[-2:], mode='bilinear', align_corners=False)
+
     pred_binary = (torch.sigmoid(pred_masks) > threshold).float()
 
     # Per-sample IoU
@@ -60,6 +98,44 @@ def compute_metrics(pred_masks, gt_masks, threshold=0.5):
     }
 
 
+def predict_sample(model, image, caption, mask, use_tta=False):
+    """
+    Run forward pass with optional relation-aware TTA.
+
+    Args:
+        model: SOCT_SAM
+        image: [1, 3, H, W]
+        caption: str
+        mask: [1, 1, H, W]
+    Returns:
+        pred_logits: [1, 1, H, W]
+    """
+    with torch.amp.autocast('cuda', enabled=True):
+        outputs = model(image, [caption], mask)
+        pred_logits = outputs['pred_masks']
+
+    if not use_tta:
+        return pred_logits
+
+    # Relation-aware Horizontal Flip TTA
+    caption_hf = swap_horizontal_relations(caption)
+    image_hf = torch.flip(image, dims=[-1])
+    mask_hf = torch.flip(mask, dims=[-1])
+
+    with torch.amp.autocast('cuda', enabled=True):
+        outputs_hf = model(image_hf, [caption_hf], mask_hf)
+        pred_logits_hf = outputs_hf['pred_masks']
+
+    prob1 = torch.sigmoid(pred_logits)
+    prob2 = torch.sigmoid(torch.flip(pred_logits_hf, dims=[-1]))
+    prob_ens = 0.5 * prob1 + 0.5 * prob2
+
+    eps = 1e-6
+    prob_ens = torch.clamp(prob_ens, eps, 1.0 - eps)
+    pred_logits_ens = torch.log(prob_ens / (1.0 - prob_ens))
+    return pred_logits_ens
+
+
 @torch.no_grad()
 def evaluate(model, test_loader, device, args):
     """Run full evaluation."""
@@ -72,7 +148,21 @@ def evaluate(model, test_loader, device, args):
     total_samples = 0
     total_time = 0
 
-    for batch_idx, (images, masks, captions) in enumerate(test_loader):
+    threshold = getattr(args, 'mask_threshold', 0.50)
+    eval_native = getattr(args, 'eval_native_size', False)
+    use_tta = getattr(args, 'use_tta', False)
+
+    for batch_idx, batch_data in enumerate(test_loader):
+        if len(batch_data) == 4:
+            images, masks, captions, orig_masks = batch_data
+            if isinstance(orig_masks, torch.Tensor):
+                orig_masks = orig_masks.to(device)
+            elif isinstance(orig_masks, list):
+                orig_masks = [om.to(device) for om in orig_masks]
+        else:
+            images, masks, captions = batch_data
+            orig_masks = None
+
         images = images.to(device)
         masks = masks.to(device)
 
@@ -84,11 +174,18 @@ def evaluate(model, test_loader, device, args):
                 ious_for_caps = []
                 for cap in cap_list:
                     start = time.time()
-                    with torch.amp.autocast('cuda', enabled=True):
-                        outputs = model(images[0:1], [cap], masks[0:1])
+                    pred_logits = predict_sample(model, images[0:1], cap, masks[0:1], use_tta=use_tta)
                     total_time += time.time() - start
 
-                    metrics = compute_metrics(outputs['pred_masks'], masks[0:1])
+                    # Native resolution mapping
+                    if eval_native and orig_masks is not None:
+                        gt_target = orig_masks[0:1] if isinstance(orig_masks, torch.Tensor) else orig_masks[0]
+                        pred_eval = F.interpolate(pred_logits, size=gt_target.shape[-2:], mode='bilinear', align_corners=False)
+                    else:
+                        gt_target = masks[0:1]
+                        pred_eval = pred_logits
+
+                    metrics = compute_metrics(pred_eval, gt_target, threshold=threshold)
                     # Store iou, intersection, and union
                     ious_for_caps.append((metrics['iou'].item(), metrics['intersection'], metrics['union']))
 
@@ -107,11 +204,18 @@ def evaluate(model, test_loader, device, args):
         else:
             # Single caption per sample
             start = time.time()
-            with torch.amp.autocast('cuda', enabled=True):
-                outputs = model(images, captions, masks)
+            caption_str = captions[0] if isinstance(captions, list) else captions
+            pred_logits = predict_sample(model, images[0:1], caption_str, masks[0:1], use_tta=use_tta)
             total_time += time.time() - start
 
-            metrics = compute_metrics(outputs['pred_masks'], masks)
+            if eval_native and orig_masks is not None:
+                gt_target = orig_masks[0:1] if isinstance(orig_masks, torch.Tensor) else orig_masks[0]
+                pred_eval = F.interpolate(pred_logits, size=gt_target.shape[-2:], mode='bilinear', align_corners=False)
+            else:
+                gt_target = masks
+                pred_eval = pred_logits
+
+            metrics = compute_metrics(pred_eval, gt_target, threshold=threshold)
             all_ious.extend(metrics['iou'].cpu().numpy().tolist())
             total_intersection += metrics['intersection']
             total_union += metrics['union']
@@ -144,14 +248,15 @@ def evaluate(model, test_loader, device, args):
 
 @torch.no_grad()
 def save_predictions(model, test_loader, device, vis_dir, args):
-    """Save predicted masks as images for visualization side-by-side with original and GT.
+    """
+    Save predicted masks as images for visualization side-by-side with original and GT.
     
     Generates a publication-grade horizontal 3-panel figure:
-      Panel 1: (a) Ground Truth (Original image duplicate + GT mask in Green)
-      Panel 2: (b) SOCT-SAM Prediction (Original image duplicate + Pred mask in Red + Sample IoU)
-      Panel 3: (c) Overlap Mask (Original image duplicate + Overlap comparison: Yellow=Overlap, Red=Pred, Green=GT)
+      Panel 1: Original satellite image (pure clean image)
+      Panel 2: Ground Truth (mask highlighted in RED)
+      Panel 3: Prediction (mask highlighted in GREEN)
+      Header: Black banner with full text query and column headers directly above each panel.
     """
-    import cv2
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     model.eval()
@@ -165,156 +270,159 @@ def save_predictions(model, test_loader, device, vis_dir, args):
     print(f"\nSaving visualizations to: {vis_dir}")
     saved_count = 0
     max_to_save = getattr(args, 'max_vis', 50)
+    threshold = getattr(args, 'mask_threshold', 0.50)
+    eval_native = getattr(args, 'eval_native_size', False)
+    use_tta = getattr(args, 'use_tta', False)
 
-    for batch_idx, (images, masks, captions) in enumerate(test_loader):
+    for batch_idx, batch_data in enumerate(test_loader):
         if max_to_save > 0 and saved_count >= max_to_save:
             break
 
-        images = images.to(device)
-        if isinstance(captions[0], list):
-            captions_eval = [cap[0] for cap in captions]
+        if len(batch_data) == 4:
+            images, masks, captions, orig_masks = batch_data
+            if isinstance(orig_masks, torch.Tensor):
+                orig_masks = orig_masks.to(device)
+            elif isinstance(orig_masks, list):
+                orig_masks = [om.to(device) for om in orig_masks]
         else:
-            captions_eval = captions
+            images, masks, captions = batch_data
+            orig_masks = None
 
-        with torch.amp.autocast('cuda', enabled=True):
-            outputs = model(images, captions_eval)
+        images = images.to(device)
+        masks = masks.to(device)
 
-        pred_probs = torch.sigmoid(outputs['pred_masks'])
-        pred_binary = (pred_probs > 0.5).float()
+        if isinstance(captions[0], list):
+            caption_str = captions[0][0]
+        else:
+            caption_str = captions[0]
 
-        for i in range(images.size(0)):
-            if max_to_save > 0 and saved_count >= max_to_save:
-                break
+        pred_logits = predict_sample(model, images[0:1], caption_str, masks[0:1], use_tta=use_tta)
 
-            # 1. Original Image [H, W, 3] in RGB range [0, 255]
-            img_tensor = images[i].cpu().permute(1, 2, 0).numpy()
+        if eval_native and orig_masks is not None:
+            target_mask_tensor = orig_masks[0:1] if isinstance(orig_masks, torch.Tensor) else orig_masks[0]
+            pred_eval = F.interpolate(pred_logits, size=target_mask_tensor.shape[-2:], mode='bilinear', align_corners=False)
+            gt_mask_np = target_mask_tensor[0, 0].cpu().numpy()
+            pred_binary = (torch.sigmoid(pred_eval) > threshold).float()
+            pred_mask_np = pred_binary[0, 0].cpu().numpy()
+
+            # Attempt to read pristine original image if available on disk
+            try:
+                raw_img_path = test_loader.dataset.imgs[batch_idx]
+                orig_img_pil = Image.open(raw_img_path).convert('RGB')
+                orig_img_np = np.array(orig_img_pil)
+            except Exception:
+                img_tensor = images[0].cpu().permute(1, 2, 0).numpy()
+                orig_img_np = np.clip(img_tensor * 255.0, 0, 255).astype(np.uint8)
+                if orig_img_np.shape[:2] != gt_mask_np.shape[:2]:
+                    orig_img_np = cv2.resize(orig_img_np, (gt_mask_np.shape[1], gt_mask_np.shape[0]))
+        else:
+            pred_binary = (torch.sigmoid(pred_logits) > threshold).float()
+            img_tensor = images[0].cpu().permute(1, 2, 0).numpy()
             orig_img_np = np.clip(img_tensor * 255.0, 0, 255).astype(np.uint8)
-            h, w = orig_img_np.shape[:2]
+            gt_mask_np = masks[0, 0].cpu().numpy()
+            pred_mask_np = pred_binary[0, 0].cpu().numpy()
 
-            # 2. GT Mask and Pred Mask
-            gt_mask_np = masks[i, 0].cpu().numpy()
-            pred_mask_np = pred_binary[i, 0].cpu().numpy()
+        h, w = orig_img_np.shape[:2]
+        gt_indices = (gt_mask_np > 0)
+        pred_indices = (pred_mask_np > 0)
 
-            gt_indices = (gt_mask_np > 0)
-            pred_indices = (pred_mask_np > 0)
+        # Mask color palettes (in RGB): Ground Truth = RED, Prediction = GREEN
+        red_rgb = np.zeros_like(orig_img_np)
+        red_rgb[:, :] = [255, 0, 0]
 
-            # Mask color palettes (in RGB)
-            gt_color = np.zeros_like(orig_img_np)
-            gt_color[:, :, 1] = 255  # Green
+        green_rgb = np.zeros_like(orig_img_np)
+        green_rgb[:, :] = [0, 255, 0]
 
-            pred_color = np.zeros_like(orig_img_np)
-            pred_color[:, :, 0] = 255  # Red
+        # Panel 1: Original satellite image
+        panel_orig = orig_img_np.copy()
 
-            yellow_color = np.zeros_like(orig_img_np)
-            yellow_color[:, :, 0] = 255  # Red + Green = Yellow
-            yellow_color[:, :, 1] = 255
+        # Panel 2: Ground Truth (RED overlay + RED contour)
+        panel_gt = orig_img_np.copy()
+        if gt_indices.any():
+            panel_gt[gt_indices] = (0.50 * orig_img_np[gt_indices] + 0.50 * red_rgb[gt_indices]).astype(np.uint8)
+            draw_mask_contour(panel_gt, gt_indices, (255, 0, 0), thickness=2)
 
-            # Logical combinations
-            gt_only = gt_indices & ~pred_indices
-            pred_only = pred_indices & ~gt_indices
-            both = gt_indices & pred_indices
+        # Panel 3: Prediction (GREEN overlay + GREEN contour)
+        panel_pred = orig_img_np.copy()
+        if pred_indices.any():
+            panel_pred[pred_indices] = (0.50 * orig_img_np[pred_indices] + 0.50 * green_rgb[pred_indices]).astype(np.uint8)
+            draw_mask_contour(panel_pred, pred_indices, (0, 255, 0), thickness=2)
 
-            # Panel 1: (a) Ground Truth (1st duplicate of image)
-            panel_gt = orig_img_np.copy()
-            if gt_indices.any():
-                panel_gt[gt_indices] = (0.55 * orig_img_np[gt_indices] + 0.45 * gt_color[gt_indices]).astype(np.uint8)
-                draw_mask_contour(panel_gt, gt_indices, (0, 255, 0), thickness=2)
+        # Calculate individual sample IoU
+        intersection_val = np.logical_and(gt_indices, pred_indices).sum()
+        union_val = np.logical_or(gt_indices, pred_indices).sum()
+        sample_iou = (intersection_val + 1e-6) / (union_val + 1e-6)
 
-            # Panel 2: (b) Model Prediction (2nd duplicate of image)
-            panel_pred = orig_img_np.copy()
-            if pred_indices.any():
-                panel_pred[pred_indices] = (0.55 * orig_img_np[pred_indices] + 0.45 * pred_color[pred_indices]).astype(np.uint8)
-                draw_mask_contour(panel_pred, pred_indices, (255, 50, 50), thickness=2)
+        # Combine 3 panels horizontally with thin sleek vertical divider
+        divider_w = 2
+        divider = np.zeros((h, divider_w, 3), dtype=np.uint8)
+        triplet_img = np.hstack([panel_orig, divider, panel_gt, divider, panel_pred])
+        total_w = triplet_img.shape[1]
 
-            # Panel 3: (c) Overlap Mask (3rd duplicate of image)
-            panel_overlap = orig_img_np.copy()
-            if gt_only.any():
-                panel_overlap[gt_only] = (0.55 * orig_img_np[gt_only] + 0.45 * gt_color[gt_only]).astype(np.uint8)
-                draw_mask_contour(panel_overlap, gt_only, (0, 255, 0), thickness=2)
-            if pred_only.any():
-                panel_overlap[pred_only] = (0.55 * orig_img_np[pred_only] + 0.45 * pred_color[pred_only]).astype(np.uint8)
-                draw_mask_contour(panel_overlap, pred_only, (255, 50, 50), thickness=2)
-            if both.any():
-                panel_overlap[both] = (0.50 * orig_img_np[both] + 0.50 * yellow_color[both]).astype(np.uint8)
-                draw_mask_contour(panel_overlap, both, (255, 255, 0), thickness=2)
+        # 4. Text banner on top of full width (Query + Column Titles)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale_query = 0.62
+        font_scale_title = 0.68
+        thickness = 1
 
-            # Calculate individual sample IoU
-            intersection_val = np.logical_and(gt_indices, pred_indices).sum()
-            union_val = np.logical_or(gt_indices, pred_indices).sum()
-            sample_iou = (intersection_val + 1e-6) / (union_val + 1e-6)
+        words = caption_str.split(' ')
+        lines = []
+        curr_line = []
+        for w_text in words:
+            test_line = ' '.join(curr_line + [w_text])
+            (text_w, _), _ = cv2.getTextSize(test_line, font, font_scale_query, thickness)
+            if text_w > (total_w - 40) and curr_line:
+                lines.append(' '.join(curr_line))
+                curr_line = [w_text]
+            else:
+                curr_line.append(w_text)
+        if curr_line:
+            lines.append(' '.join(curr_line))
 
-            font = cv2.FONT_HERSHEY_SIMPLEX
+        # Banner layout
+        query_y_start = 32
+        line_height = 28
+        query_end_y = query_y_start + (len(lines) - 1) * line_height
 
-            # Subtitle bar at bottom of each panel
-            sub_h = 42
-            panel_specs = [
-                (panel_gt, "(a) Ground Truth", (0, 255, 120)),
-                (panel_pred, f"(b) Prediction (IoU: {sample_iou * 100:.2f}%)", (255, 120, 120)),
-                (panel_overlap, "(c) Mask (Yellow: Overlap, Red: Pred, Green: GT)", (0, 240, 255)),
-            ]
-            for panel, text_label, text_col in panel_specs:
-                cv2.rectangle(panel, (0, h - sub_h), (w, h), (18, 18, 18), -1)
-                cv2.putText(panel, text_label, (15, h - 14), font, 0.65, text_col, 2, lineType=cv2.LINE_AA)
+        title_y = query_end_y + 40
+        banner_h = title_y + 16
 
-            # Combine 3 duplicate panels horizontally with a sleek vertical divider
-            divider = np.zeros((h, 4, 3), dtype=np.uint8) + 40
-            triplet_img = np.hstack([panel_gt, divider, panel_pred, divider, panel_overlap])
-            total_w = triplet_img.shape[1]
+        banner = np.zeros((banner_h, total_w, 3), dtype=np.uint8)
 
-            # 4. Text banner on top of full width (NEVER truncate)
-            caption = captions[i]
-            if isinstance(caption, list):
-                caption = caption[0]
-            caption_str = str(caption)
+        # Draw query expression at top
+        for idx, line in enumerate(lines):
+            y_pos = query_y_start + idx * line_height
+            cv2.putText(banner, line, (15, y_pos), font, font_scale_query, (255, 255, 255), thickness, cv2.LINE_AA)
 
-            max_char = max(70, int(total_w / 16))
-            words = caption_str.split(' ')
-            lines = []
-            current_line = []
-            current_len = 0
-            for word in words:
-                if current_len + len(word) + 1 > max_char:
-                    lines.append(' '.join(current_line))
-                    current_line = [word]
-                    current_len = len(word)
-                else:
-                    current_line.append(word)
-                    current_len += len(word) + 1
-            if current_line:
-                lines.append(' '.join(current_line))
+        # Draw Column Titles directly aligned over each panel
+        col1_x = 15
+        col2_x = w + divider_w + 15
+        col3_x = 2 * (w + divider_w) + 15
 
-            banner_h = 60 + len(lines) * 28
-            banner = np.zeros((banner_h, total_w, 3), dtype=np.uint8) + 16
+        cv2.putText(banner, "Original", (col1_x, title_y), font, font_scale_title, (255, 255, 255), thickness, cv2.LINE_AA)
+        cv2.putText(banner, "Ground Truth", (col2_x, title_y), font, font_scale_title, (255, 255, 255), thickness, cv2.LINE_AA)
+        cv2.putText(banner, "Prediction", (col3_x, title_y), font, font_scale_title, (255, 255, 255), thickness, cv2.LINE_AA)
 
-            for idx, line in enumerate(lines):
-                y_pos = 30 + idx * 26
-                cv2.putText(banner, f"Query: {line}" if idx == 0 else f"       {line}", 
-                            (20, y_pos), font, 0.70, (255, 255, 255), 2, cv2.LINE_AA)
+        # 5. Stack header banner on top of the 3 panels
+        final_img = np.vstack([banner, triplet_img])
 
-            y_sub = 30 + len(lines) * 26
-            split_name = getattr(args, 'split', 'test')
-            cv2.putText(banner, f"Model: SOCT-SAM (Ours)   |   Sample IoU: {sample_iou * 100:.2f}%   |   Split: {split_name}", 
-                        (20, y_sub), font, 0.58, (0, 240, 255), 1, cv2.LINE_AA)
+        # 6. Save visualization image
+        file_prefix = f'sample_{batch_idx}'
+        vis_img = Image.fromarray(final_img)
+        vis_img.save(os.path.join(vis_dir, f'{file_prefix}_3panel.png'))
+        vis_img.save(os.path.join(vis_dir, f'{file_prefix}_iou{sample_iou*100:.1f}.png'))
 
-            # 5. Stack banner on top of the 3-panel image
-            final_img = np.vstack([banner, triplet_img])
+        with open(os.path.join(vis_dir, f'{file_prefix}_info.txt'), 'w', encoding='utf-8') as f_meta:
+            f_meta.write(f"Sample: batch_{batch_idx}\n")
+            f_meta.write(f"Query Expression: {caption_str}\n")
+            f_meta.write(f"Sample IoU: {sample_iou * 100:.2f}%\n")
+            f_meta.write(f"Ground Truth Pixels: {int(gt_indices.sum())}\n")
+            f_meta.write(f"Predicted Pixels: {int(pred_indices.sum())}\n")
+            f_meta.write(f"Intersection Pixels: {int(intersection_val)}\n")
+            f_meta.write(f"Union Pixels: {int(union_val)}\n")
 
-            # 6. Save image under both naming conventions (so file viewer opens it directly)
-            file_prefix = f'sample_{batch_idx}_{i}'
-            vis_img = Image.fromarray(final_img)
-            vis_img.save(os.path.join(vis_dir, f'{file_prefix}_combined.png'))
-            vis_img.save(os.path.join(vis_dir, f'{file_prefix}_3panel.png'))
-
-            with open(os.path.join(vis_dir, f'{file_prefix}_info.txt'), 'w', encoding='utf-8') as f_meta:
-                f_meta.write(f"Sample: batch_{batch_idx}_sample_{i}\n")
-                f_meta.write(f"Query Expression: {caption_str}\n")
-                f_meta.write(f"Sample IoU: {sample_iou * 100:.2f}%\n")
-                f_meta.write(f"Ground Truth Pixels: {int(gt_indices.sum())}\n")
-                f_meta.write(f"Predicted Pixels: {int(pred_indices.sum())}\n")
-                f_meta.write(f"Intersection Pixels: {int(intersection_val)}\n")
-                f_meta.write(f"Union Pixels: {int(union_val)}\n")
-
-            saved_count += 1
+        saved_count += 1
+        print(f"  [VIS {saved_count:2d}/{max_to_save}] IoU: {sample_iou*100:5.2f}% | Query: \"{caption_str}\"")
 
     print(f"  Successfully saved {saved_count} visualizations to {vis_dir}")
 
@@ -325,11 +433,14 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     print(f"\n{'='*60}")
-    print(f"  Enhanced_RRSIS_UOT Evaluation")
+    print(f"  SOCT-SAM Evaluation")
     print(f"  Dataset: {args.dataset}")
     print(f"  Split: {args.split}")
     print(f"  Checkpoint: {args.resume}")
     print(f"  Device: {device}")
+    print(f"  Evaluation Mode: {'Native GT Resolution' if getattr(args, 'eval_native_size', False) else 'Resized 700x700'}")
+    print(f"  TTA (Aerial Equivariant): {'Enabled' if getattr(args, 'use_tta', False) else 'Disabled'}")
+    print(f"  Mask Threshold: {getattr(args, 'mask_threshold', 0.50):.3f}")
     print(f"  --- Enhancements ---")
     print(f"  SOCT-SAM: {getattr(args, 'use_soct', True) and not getattr(args, 'no_soct', False)}")
     print(f"  Dynamic LoRA: {args.use_dynamic_lora}")
@@ -351,16 +462,19 @@ def main():
         args.data_root = resolved_data
 
     # ====== Build Model ======
-    model = Enhanced_RRSIS_UOT(
+    model = SOCT_SAM(
         sam3_ckpt=args.sam3_ckpt,
         image_size=args.image_size,
         lora_rank=args.lora_rank,
         lora_alpha=args.lora_alpha,
+        lora_dropout=args.lora_dropout,
+        freeze_backbone=args.freeze_backbone,
+        freeze_text_encoder=args.freeze_text_encoder,
         use_dynamic_lora=args.use_dynamic_lora,
         use_contrastive_loss=args.use_contrastive_loss,
         use_multiscale_ot=args.use_multiscale_ot,
         use_ohem_loss=args.use_ohem_loss,
-        # SOCT-SAM (CVPR 2027 Proposed Full Model B6)
+        # SOCT-SAM Model
         use_soct=getattr(args, 'use_soct', True) and not getattr(args, 'no_soct', False),
         lambda_ord=getattr(args, 'lambda_ord', 5.0),
         theta_anchor=getattr(args, 'theta_anchor', 0.1),
@@ -387,7 +501,7 @@ def main():
         candidates = [
             os.path.join(os.path.dirname(resume_path), 'best_model.pth'),
             os.path.join(args.output_dir, 'best_model.pth'),
-            os.path.join(args.output_dir, 'checkpoint_epoch30.pth'),
+            os.path.join(args.output_dir, 'checkpoint_epoch40.pth'),
             os.path.join(args.output_dir, 'latest_model.pth'),
         ]
         for cand in candidates:
@@ -427,6 +541,9 @@ def main():
     # ====== Print Results ======
     print(f"\n{'='*60}")
     print(f"  Results on {args.dataset} ({args.split})")
+    print(f"  Mask Threshold: {getattr(args, 'mask_threshold', 0.50):.3f}")
+    print(f"  Native Size Eval: {getattr(args, 'eval_native_size', False)}")
+    print(f"  TTA Enabled: {getattr(args, 'use_tta', False)}")
     print(f"{'='*60}")
     print(f"  mIoU:  {results['mIoU']*100:.2f}%")
     print(f"  oIoU:  {results['oIoU']*100:.2f}%")
@@ -437,11 +554,16 @@ def main():
     print(f"  P@0.9: {results['P@0.9']*100:.2f}%")
     print(f"  Samples: {results['num_samples']}")
     print(f"  Avg Time: {results['avg_time']*1000:.1f}ms")
+
     # ====== Save Results to TXT File ======
+    os.makedirs(args.output_dir, exist_ok=True)
     res_file = os.path.join(args.output_dir, f'results_{args.split}.txt')
     with open(res_file, 'w', encoding='utf-8') as f:
         f.write(f"Results on {args.dataset} ({args.split})\n")
         f.write(f"Checkpoint: {resume_path}\n")
+        f.write(f"Native Size Eval: {getattr(args, 'eval_native_size', False)}\n")
+        f.write(f"TTA: {'Enabled (Aerial Equivariant)' if getattr(args, 'use_tta', False) else 'Disabled'}\n")
+        f.write(f"Mask Threshold: {getattr(args, 'mask_threshold', 0.50):.3f}\n")
         f.write(f"{'='*40}\n")
         f.write(f"mIoU:  {results['mIoU']*100:.2f}%\n")
         f.write(f"oIoU:  {results['oIoU']*100:.2f}%\n")

@@ -225,8 +225,7 @@ def init_distributed_mode(args):
 
 
 def resolve_sam3_ckpt(user_path=None):
-    """Auto-detect sam3.pt across filesystem and Kaggle inputs."""
-    import glob
+    """Auto-detect sam3.pt across standard local paths and user input."""
     if user_path and os.path.isfile(user_path):
         return user_path
 
@@ -236,85 +235,31 @@ def resolve_sam3_ckpt(user_path=None):
     candidates.extend([
         "./pre-trained-weights/sam3.pt",
         "../sam3_pre_trained_weights/sam3.pt",
-        "/kaggle/input/SAM3_Weight/sam3.pt",
-        "/kaggle/input/sam3_weight/sam3.pt",
-        "/kaggle/input/sam3-weight/sam3.pt",
-        "/kaggle/input/Weight_SAM3/sam3.pt",
-        "/kaggle/input/weight-sam3/sam3.pt",
-        "/kaggle/input/weightsam3/sam3.pt",
-        "/kaggle/input/datasets/abdulahad0011/sam3-weight/sam3.pt",
-        "/kaggle/input/datasets/habdulrehman/weight-sam3/sam3.pt",
+        "./checkpoints/sam3.pt",
+        "../checkpoints/sam3.pt",
+        "./weights/sam3.pt",
+        "../weights/sam3.pt",
     ])
     for c in candidates:
         if os.path.isfile(c):
             return c
 
-    # Recursive search in /kaggle/input
-    if os.path.exists("/kaggle/input"):
-        matches = glob.glob("/kaggle/input/**/sam3.pt", recursive=True)
-        if matches:
-            return matches[0]
-
     return user_path or "./pre-trained-weights/sam3.pt"
 
 
 def resolve_data_root(user_path=None, dataset="rrsis_hr"):
-    """Auto-detect dataset directory in /kaggle/input."""
-    import glob
+    """Resolve dataset directory path from user input or default location."""
     if user_path and os.path.exists(user_path):
         return user_path
 
-    if os.path.exists("/kaggle/input"):
-        clean_ds = dataset.lower().replace('-', '_')
-        
-        # Dataset-specific Kaggle candidates
-        if clean_ds in ['ris_lad', 'rislad']:
-            for candidate in [
-                "/kaggle/input/RRSIS-low",
-                "/kaggle/input/rrsis-low",
-                "/kaggle/input/datasets/abdulahad0011/rrsis-low",
-                "/kaggle/input/ris-lad",
-                "/kaggle/input/ris_lad",
-                "/kaggle/input/rislad",
-            ]:
-                if os.path.exists(candidate):
-                    return candidate
-        elif clean_ds in ['rrsis_hr', 'rrsishr']:
-            for candidate in [
-                "/kaggle/input/rrsis-hr",
-                "/kaggle/input/rrsis_hr",
-                "/kaggle/input/RRSIS-HR",
-                "/kaggle/input/resis-hr",
-            ]:
-                if os.path.exists(candidate):
-                    return candidate
-        elif clean_ds in ['rrsis_d', 'rrsisd']:
-            for candidate in [
-                "/kaggle/input/rrsis-d",
-                "/kaggle/input/rrsis_d",
-                "/kaggle/input/RRSIS-D",
-                "/kaggle/input/rrsisd",
-            ]:
-                if os.path.exists(candidate):
-                    return candidate
-        elif clean_ds in ['refsegrs', 'refseg_rs']:
-            for candidate in [
-                "/kaggle/input/RefSegRS",
-                "/kaggle/input/refsegrs",
-                "/kaggle/input/refseg-rs",
-                "/kaggle/input/refseg_rs",
-            ]:
-                if os.path.exists(candidate):
-                    return candidate
-
-        # Recursive search for refer or dataset folder
-        matches = glob.glob(f"/kaggle/input/**/{dataset}/**/refer", recursive=True)
-        if not matches:
-            clean_name = dataset.replace('_', '-').replace('-', '')
-            matches = glob.glob(f"/kaggle/input/**/*{clean_name}*/**/refer", recursive=True)
-        if not matches:
-            matches = glob.glob(f"/kaggle/input/**/refer", recursive=True)
-        if matches:
-            return matches[0]
+    candidates = [
+        f"./data/{dataset}",
+        f"./data/{dataset.replace('_', '-')}",
+        f"./data/{dataset.replace('-', '_')}",
+        "./data/",
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
 
     return user_path or "./data/"

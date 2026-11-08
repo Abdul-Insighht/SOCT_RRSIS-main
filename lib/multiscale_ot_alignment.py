@@ -1,5 +1,5 @@
 """
-Multi-Scale OT Feature Alignment for Enhanced_RRSIS_UOT.
+Multi-Scale OT Feature Alignment for SOCT-SAM.
 
 Extends the single-scale OT alignment from RRSIS_SAM3 to operate across
 multiple FPN (Feature Pyramid Network) levels with scale-aware projections.

@@ -59,9 +59,8 @@ class RandomResize(object):
 
 def invert_directional_text(text: str) -> str:
     """
-    Inverts left/right directional relations when image is horizontally flipped.
-    Paper CVPR 2027 Section 6 Control 5:
-    'Horizontal reflection plus left/right inversion preserves the transformed target label.'
+    Inverts left/right directional relations when image is horizontally flipped
+    to preserve valid directional consistency with the transformed target label.
     """
     # Use placeholder to avoid colliding swaps (e.g. left -> right -> left)
     res = text
@@ -106,8 +105,7 @@ class TargetAwareZoomCrop(object):
 
     def __call__(self, image, target, caption=None):
         if caption is not None:
-            # Paper CVPR 2027 Section 6 Control 6:
-            # "Avoid relation-changing target-aware crops: disable such crops on the directional subset"
+            # Avoid relation-changing target-aware crops on expressions with directional relations
             from lib.language_parser import GLOBAL_PARSER
             c_text = caption if isinstance(caption, str) else caption[0]
             p_info = GLOBAL_PARSER.parse(c_text)

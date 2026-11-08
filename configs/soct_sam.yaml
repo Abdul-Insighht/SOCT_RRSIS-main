@@ -1,4 +1,4 @@
-# Enhanced_RRSIS_UOT Training Configuration
+﻿# SOCT-SAM Training Configuration
 # Extends RRSIS_SAM3 with 4 novel techniques
 
 # ====== Model ======
@@ -8,7 +8,7 @@ lora_alpha: 32.0         # LoRA scaling factor
 freeze_backbone: true    # Freeze ViT backbone
 freeze_text_encoder: true # Freeze text encoder
 
-# ====== SOCT-SAM (CVPR 2027 Proposed Full Model B6) ======
+# ====== SOCT-SAM ======
 use_soct: true                # Stochastic-Order Constrained Transport
 lambda_ord: 5.0               # Stochastic order penalty weight
 theta_anchor: 0.1             # Contextual anchor belief temperature
@@ -37,7 +37,7 @@ focal_gamma: 2.0              # Focal loss focusing parameter
 
 # ====== Training ======
 epochs: 40
-batch_size: 2            # Per GPU (Kaggle 16GB compatible)
+batch_size: 2            # Per GPU (batch size)
 grad_accum_steps: 4      # Effective batch = 2 * 4 = 8
 lr: 5e-5                 # Base learning rate
 lr_backbone: 1e-5        # LoRA adapter learning rate
@@ -52,14 +52,14 @@ ce_weight: 0.5
 boundary_weight: 0.2
 
 # ====== Optimization ======
-fp16: true               # Mixed precision for Kaggle 16GB
+fp16: true               # Mixed precision training
 gradient_checkpointing: true
 seed: 42
 
 # ====== Dataset Specific Notes ======
-# RRSIS-D:   12181 train → ~1523 steps/epoch (bs=8) → 60,920 total steps
-# RRSIS-HR:  2118 train  → ~265 steps/epoch (bs=8)  → 10,600 total steps
-# RefSegRS:  2172 train  → ~272 steps/epoch (bs=8)  → 10,880 total steps
+# RRSIS-D:   12181 train -> ~1523 steps/epoch (bs=8) -> 60,920 total steps
+# RRSIS-HR:  2118 train  -> ~265 steps/epoch (bs=8)  -> 10,600 total steps
+# RefSegRS:  2172 train  -> ~272 steps/epoch (bs=8)  -> 10,880 total steps
 
 # ====== Ablation Guide ======
 # To run baseline (RRSIS_SAM3 equivalent):
@@ -70,3 +70,4 @@ seed: 42
 #   Contrastive only:      --no_dynamic_lora --no_multiscale_ot --no_ohem_loss
 #   Multi-Scale OT only:   --no_dynamic_lora --no_contrastive_loss --no_ohem_loss
 #   OHEM only:             --no_dynamic_lora --no_contrastive_loss --no_multiscale_ot
+
